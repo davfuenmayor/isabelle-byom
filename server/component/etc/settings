@@ -1,0 +1,2 @@
+# scala_build registers the JAR from etc/build.props automatically.
+ISABELLE_BYOM_HOME="$COMPONENT"

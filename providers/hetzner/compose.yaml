@@ -1,0 +1,27 @@
+services:
+  isabelle:
+    build:
+      context: ../..
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    environment:
+      BYOM_JAVA_OPTIONS: "-Djava.awt.headless=true -Xms128m -Xmx1g -Xss16m"
+    mem_limit: 3g
+    memswap_limit: 5g
+    cpus: 2
+    stop_grace_period: 30s
+  caddy:
+    image: caddy:2.11.9
+    restart: unless-stopped
+    environment:
+      BYOM_HOST: ${BYOM_HOST:?Set BYOM_HOST}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+volumes:
+  caddy_data:
+  caddy_config:

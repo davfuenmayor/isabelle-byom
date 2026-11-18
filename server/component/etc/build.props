@@ -1,0 +1,5 @@
+title = Isabelle BYOM file commands
+module = lib/byom.jar
+requirements = env:ISABELLE_SCALA_JAR
+sources = src/byom.scala
+services = isabelle.byom.Commands

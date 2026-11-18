@@ -1,0 +1,9 @@
+**
+!server/
+!server/Dockerfile
+!server/*.sh
+!server/component/
+!server/component/etc/
+!server/component/etc/*
+!server/component/src/
+!server/component/src/*

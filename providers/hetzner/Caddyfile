@@ -1,0 +1,3 @@
+{$BYOM_HOST} {
+    reverse_proxy isabelle:8080
+}

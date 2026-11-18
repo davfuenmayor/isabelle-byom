@@ -1,0 +1,40 @@
+# Local credentials and deployer state (use *.example for publishable templates)
+.env
+.env.*
+!.env.example
+*.token
+*.pem
+*.key
+*.p12
+*.pfx
+*.credentials
+credentials
+credentials.*
+!/server/credentials.sh
+!/test/credentials.sh
+id_rsa*
+id_ed25519*
+*.known_hosts
+.ssh/
+.fly/
+.hcloud/
+
+# Builds and local test output
+server/component/lib/*.jar
+dist/
+_build/
+deps/
+*.beam
+*.log
+*.dump
+coverage/
+
+# Editors and OS metadata
+.DS_Store
+._*
+Thumbs.db
+.idea/
+.vscode/
+*~
+*.swp
+*.swo
