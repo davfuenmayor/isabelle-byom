@@ -4,6 +4,9 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=../common.sh
 source "$root/providers/common.sh"
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=ssh.sh
+source "$root/providers/hetzner/ssh.sh"
 name=isabelle-byom location=fsn1 type=cx23 token_file='' key_file='' hostname='' sslip=false
 usage() {
   echo 'Usage: ./byom hetzner (--sslip | --hostname HOST) [--name NAME] [--location fsn1] [--type cx23] [--token FILE] [--ssh-key-file PATH]' >&2
@@ -25,11 +28,7 @@ done
 if $sslip; then [[ -z "$hostname" ]] || usage
 else [[ "$hostname" =~ ^[a-z0-9][a-z0-9.-]+\.[a-z]+$ ]] || usage; fi
 require_commands hcloud ssh ssh-keygen tar
-if [[ -n "$token_file" ]]; then
-  HCLOUD_TOKEN=$(read_token "$token_file" "Hetzner project Read & Write token")
-elif [[ -z ${HCLOUD_TOKEN:-} ]]; then
-  HCLOUD_TOKEN=$(read_token "" "Hetzner project Read & Write token")
-fi
+HCLOUD_TOKEN=$(read_token "$token_file" "${HCLOUD_TOKEN:-}" 'Hetzner project Read & Write token')
 export HCLOUD_TOKEN
 # Authenticate before creating local keys or cloud resources.
 servers=$(hcloud server list -o noheader -o columns=name)
@@ -67,9 +66,7 @@ ip=$(hcloud server describe "$name" -o 'format={{.PublicNet.IPv4.IP}}')
 if $sslip; then hostname="$ip.sslip.io"; fi
 echo "Server: $name ($ip); HTTPS hostname: $hostname"
 remote() {
-  hcloud server ssh "$name" -i "$key_file" -o IdentitiesOnly=yes -o BatchMode=yes \
-    -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
-    -o "UserKnownHostsFile=$key_file.known_hosts" "$@"
+  hetzner_ssh "$name" "$key_file" "$@"
 }
 ready=false
 for ((attempt=0; attempt<60; attempt++)); do

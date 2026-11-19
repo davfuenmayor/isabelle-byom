@@ -66,6 +66,34 @@ PASSWORD=...
 ===================================
 ```
 
+## Diagnose an instance
+
+`diagnose` checks an existing deployment without rebuilding, restarting or
+resizing it. It checks provider access, Machine state, native TCP authentication,
+file-command registration and the public TLS/WebSocket tunnel. It prints the
+current connection credentials after those checks pass.
+
+Run it in the BYOM runner with the same token inputs as deployment. Fly uses
+`FLY_API_TOKEN`, Hetzner uses `HCLOUD_TOKEN`, and `--token FILE` takes precedence:
+
+```sh
+./byom diagnose fly --token fly.token
+./byom diagnose hetzner --sslip --token hetzner.token --ssh-key-file /path/to/deployment-key
+```
+
+For Hetzner with your own domain, replace `--sslip` with `--hostname HOST`.
+A stopped Machine is reported with a start command; diagnosis does not start it.
+The checks are streamed over SSH, so an older installed image can be diagnosed
+without redeployment.
+
+If Livebook connects and then reports a close after about five seconds, check
+its password. Isabelle closes connections without a reply for invalid passwords;
+the WebSocket close handshake can account for that delay. Run `diagnose`, update
+Livebook's `ISABELLE_URL` and `ISABELLE_PASSWORD` secrets with the returned values,
+then rerun its connection cell. The native password changes on server restart.
+A close during authentication can also indicate server failure; use the failed
+check to locate the problem.
+
 ## Native protocol over WebSocket
 
 The tunnel carries the Isabelle2026 TCP protocol over binary WebSocket messages.
@@ -98,7 +126,7 @@ echo {"message":"hello"}\n
 ```
 
 Replies begin with `OK`, `ERROR`, `NOTE`, `FINISHED` or `FAILED`, optionally
-followed by a space and a JSON value. An async command first acknowledges with
+followed by a space and a JSON value or a YXML element. An async command first acknowledges with
 `OK {"task":"UUID"}`. Match subsequent NOTE/FINISHED/FAILED messages by their
 `task` field; other commands/tasks can interleave. A FINISHED reply is not by
 itself a successful proof: inspect its `ok` flag and error diagnostics.
@@ -124,6 +152,22 @@ absolute paths, `..` traversal and symlinks, and atomically replace files. This
 per-file check is not a transport allocation limit. Expected filesystem failures
 produce native ERROR replies and leave the connection usable.
 
+BYOM file arguments and successful replies use native YXML. Each successful
+reply is an empty `byom` element with Base64-encoded attribute values. Decode
+them as UTF-8. Isabelle sends errors in its usual reply format. Use matching
+BYOM and `isabelle_elixir` versions for remote file operations.
+
+For a write, send a `file` element with a raw `session_id` or `project_id`
+UUID and a `path` attribute. Encode the UTF-8 path and file body separately
+as standard Base64 without line breaks. This example writes `hello` to
+`test.txt`. Each `\x05` or `\x06` represents a single byte. Apply the native
+framing described above.
+
+```text
+byom_write_file \x05\x06file\x06session_id=UUID\x06path=dGVzdC50eHQ=\x05aGVsbG8=\x05\x06\x05
+OK \x05\x06byom\x06path=BASE64_SERVER_PATH\x05\x05\x06\x05
+```
+
 **Session files** belong to an already started native session. Write them with
 `byom_write_file`, using its session ID, a relative path and the source text.
 
@@ -132,24 +176,17 @@ it; writes racing with stop may fail. Stopped roots are not recreated. Use the
 returned parent directory for `master_dir` in `use_theories`. Connection close
 is not session stop. Client-local filesystem calls do not access these paths.
 
-```text
-byom_write_file {"session_id":"UUID","path":"Example.thy","text":"theory Example imports Main begin\nlemma \"x = x\" by simp\nend\n"}
-OK {"path":"/SERVER_SESSION_DIR/Example.thy"}
-```
-
 **Project sources** must exist before a session/build can use them.
 `byom_create_project` returns `project_id` and a server-side `dir`.
-Use the handle in `byom_write_project_file` and pass `dir` in native
+Use the `project_id` attribute with `byom_write_project_file` and pass `dir` in native
 `session_build`/`session_start` `dirs`. Retain the sources until every build and
 session using them has stopped:
 
 ```text
 byom_create_project
-OK {"project_id":"UUID","dir":"/SERVER_PROJECT_DIR"}
-byom_write_project_file {"project_id":"UUID","path":"ROOT","text":"session Example = HOL +\n  theories Example\n"}
-OK {"path":"/SERVER_PROJECT_DIR/ROOT"}
-byom_write_project_file {"project_id":"UUID","path":"Example.thy","text":"theory Example imports Main begin end\n"}
-OK {"path":"/SERVER_PROJECT_DIR/Example.thy"}
+OK \x05\x06byom\x06project_id=BASE64_ID\x06dir=BASE64_DIR\x05\x05\x06\x05
+byom_write_project_file \x05\x06file\x06project_id=UUID\x06path=dGVzdC50eHQ=\x05aGVsbG8=\x05\x06\x05
+OK \x05\x06byom\x06path=BASE64_SERVER_PATH\x05\x05\x06\x05
 ```
 
 The caller owns cleanup, including failure paths. Disconnect does not remove
@@ -161,8 +198,8 @@ After all builds and sessions using a project have stopped, release it with
 `byom_remove_project`:
 
 ```text
-byom_remove_project {"project_id":"UUID"}
-OK {"removed":"UUID"}
+byom_remove_project \x05\x06project\x06project_id=UUID\x05\x05\x06\x05
+OK \x05\x06byom\x06removed=BASE64_ID\x05\x05\x06\x05
 ```
 
 ## Architecture
@@ -170,7 +207,6 @@ OK {"removed":"UUID"}
 - `server/`: shared amd64 image, runtime and Scala file component.
 - `providers/`: provider-native deployment, TLS, resource budgets and guides.
 - `test/`: SDK-independent protocol, filesystem, lifecycle and provider checks.
-- [TODO.md](TODO.md): remaining qualification and future targets.
 
 The client, server and deployer are separate projects/contracts. Provider
 credentials stay in deployment. Native reasoning and file placement stay in the
@@ -201,6 +237,18 @@ The relay port must still be unique on a shared host. Runtime configuration is
 writable separately from the installation. Resource defaults and restart rules
 belong to provider configuration. Readiness/password retrieval is provider-specific
 and verified through the public endpoint before credentials are printed.
+
+Both providers currently cap the JVM heap at 1 GiB for small workloads. This
+passed the example notebook, including its custom session build, on Fly with
+2 shared CPUs and 4 GiB RAM; it is not a two-session capacity test. For two
+active HOL sessions, start with 4 vCPUs, 8 GiB RAM and a 2 GiB JVM heap
+(`-Xmx2g`), then measure the intended theories. This is our starting estimate;
+[Isabelle's hardware guidance](https://isabelle.in.tum.de/) recommends 8 GB and
+4 cores for medium applications. Large imports and external provers may need
+more memory. The JVM heap limit covers neither ML prover processes nor all
+JVM memory. Leave RAM for both and the OS. During testing, the 4 GiB Machine
+suffered a confirmed OOM restart with Isabelle's default 4 GiB heap limit.
+Restarts end sessions and change the native password.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |

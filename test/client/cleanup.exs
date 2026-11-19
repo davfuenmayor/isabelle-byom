@@ -31,11 +31,7 @@ defmodule IntegrationCleanupTest do
 
     try do
       assert {:error, _} =
-               IsabelleClient.command(checker, "byom_write_file", %{
-                 session_id: session,
-                 path: "gone",
-                 text: "no"
-               })
+               IsabelleClient.write_file(checker, "gone", "no", session_id: session)
 
       assert {:error, _} = IsabelleClient.write_project_file(checker, project, "gone", "no")
     after
@@ -70,6 +66,7 @@ defmodule IntegrationCleanupTest do
         code = """
         {:ok, shared} = IsabelleClient.Shared.connect(password: password, url: url)
         {:ok, task} = IsabelleClient.Shared.start_session(shared, [session: "HOL"], 120_000)
+        {:ok, _path} = IsabelleClient.Shared.write_file(shared, "shared.txt", "λ")
         Process.put(:shared_created, {shared, task.result["session_id"]})
         raise "deliberate failure"
         """
@@ -87,11 +84,7 @@ defmodule IntegrationCleanupTest do
 
     try do
       assert {:error, _} =
-               IsabelleClient.command(checker, "byom_write_file", %{
-                 session_id: session,
-                 path: "gone",
-                 text: "no"
-               })
+               IsabelleClient.write_file(checker, "gone", "no", session_id: session)
     after
       IsabelleClient.close(checker)
     end

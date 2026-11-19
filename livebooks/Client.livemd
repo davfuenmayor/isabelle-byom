@@ -20,13 +20,23 @@ Mix.install([
 ## Connecting to a Server
 
 Add both values from your deployment in Livebook’s **Secrets** panel.
+The Isabelle password changes when its server restarts. To verify the instance
+and retrieve the current values, run `./byom diagnose fly` in the BYOM runner
+(with `FLY_API_TOKEN` set, or add `--token fly.token`), then update these secrets.
 
 - `ISABELLE_URL` holds the deployment’s `URL`, including the `wss://` scheme.
-- `ISABELLE_PASSWORD` holds the deployment’s current Isabelle `PASSWORD`.
+- `ISABELLE_PASSWORD` holds the current Isabelle `PASSWORD` value only, without
+  the `PASSWORD=` label or surrounding quotes.
 
 ```elixir
 url = System.fetch_env!("LB_ISABELLE_URL")
-{:ok, client} = IsabelleClient.connect(System.fetch_env!("LB_ISABELLE_PASSWORD"), url: url)
+client =
+  case IsabelleClient.connect(System.fetch_env!("LB_ISABELLE_PASSWORD"), url: url) do
+    {:ok, client} -> client
+    {:error, reason} when reason in [:closed, {:authentication_failed, :closed}] ->
+      raise "Server closed the connection during authentication. Run ./byom diagnose fly, update ISABELLE_PASSWORD with its current PASSWORD value, and retry."
+    {:error, reason} -> raise "Connection failed: #{inspect(reason)}"
+  end
 ```
 
 ```elixir
@@ -42,13 +52,10 @@ keeps a LIFO stack of started sessions. The top session is the active session.
 
 `echo`, `help`, and `command` are synchronous Isabelle server commands.
 They are useful for smoke tests and for commands that do not create async
-Isabelle tasks. Note the automatic conversion between Elixir structs and JSON payloads.
+Isabelle tasks. The default format is YXML. Choose JSON explicitly to send an Elixir map.
 
 ```elixir
-IsabelleClient.echo(client, %{
-  label: "echo some map",
-  message: "hello world"
-})
+IsabelleClient.echo(client, %{label: "echo some map", message: "hello world"}, format: :json)
 ```
 
 ```elixir
@@ -57,7 +64,8 @@ commands
 ```
 
 ```elixir
-{:ok, result} = IsabelleClient.command(client, "echo", "some stuff")
+yxml = "\x05\x06example\x05hello world\x05\x06\x05"
+{:ok, {:yxml, result}} = IsabelleClient.command(client, "echo", yxml)
 result
 ```
 

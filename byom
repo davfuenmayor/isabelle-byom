@@ -2,7 +2,13 @@
 set -euo pipefail
 root=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 case "${1:-}" in
-  -h|--help) printf 'Isabelle BYOM deployment\nUsage: ./byom PROVIDER [OPTIONS]\nProviders: fly, hetzner\nUse ./byom PROVIDER --help for options.\n'; exit 0 ;;
+  -h|--help) printf 'Isabelle BYOM deployment\nUsage: ./byom PROVIDER [OPTIONS]\nProviders: fly, hetzner\nDiagnose: ./byom diagnose PROVIDER [OPTIONS]\nUse ./byom PROVIDER --help for options.\n'; exit 0 ;;
+  diagnose)
+    case "${2:-}" in
+      -h|--help) echo 'Usage: ./byom diagnose {fly|hetzner} [OPTIONS]'; exit 0 ;;
+      fly|hetzner) provider=$2; shift 2; exec bash "$root/providers/$provider/diagnose.sh" "$@" ;;
+      *) echo 'Usage: ./byom diagnose {fly|hetzner} [OPTIONS]' >&2; exit 1 ;;
+    esac ;;
   fly|hetzner) provider=$1; shift; exec bash "$root/providers/$provider/deploy.sh" "$@" ;;
   *) echo 'Usage: ./byom PROVIDER [OPTIONS] (available: fly, hetzner)' >&2; exit 1 ;;
 esac

@@ -24,11 +24,7 @@ done
 require_commands fly
 [[ "$app" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo 'Invalid Fly app name' >&2; exit 1; }
 [[ "$region" =~ ^[a-z]{3}$ ]] || { echo 'Invalid Fly region' >&2; exit 1; }
-if [[ -n "$token_file" ]]; then
-  FLY_API_TOKEN=$(read_token "$token_file" "Fly app deploy token")
-elif [[ -z ${FLY_API_TOKEN:-} ]]; then
-  FLY_API_TOKEN=$(read_token "" "Fly app deploy token")
-fi
+FLY_API_TOKEN=$(read_token "$token_file" "${FLY_API_TOKEN:-}" 'Fly app deploy token')
 [[ "$FLY_API_TOKEN" == 'FlyV1 '* ]] || { echo 'Expected the whole FlyV1 token' >&2; exit 1; }
 export FLY_API_TOKEN
 fly status --app "$app" --json >/dev/null

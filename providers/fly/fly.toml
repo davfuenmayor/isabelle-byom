@@ -5,6 +5,9 @@ kill_timeout = "30s"
 [build]
   dockerfile = "../../server/Dockerfile"
 
+[env]
+  BYOM_JAVA_OPTIONS = "-Djava.awt.headless=true -Xms128m -Xmx1g -Xss16m"
+
 [http_service]
   internal_port = 8080
   force_https = true

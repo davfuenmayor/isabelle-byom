@@ -81,6 +81,19 @@ An explicit `--token` file takes precedence. With neither, BYOM prompts:
 ./byom fly
 ```
 
+## Diagnose an existing deployment
+
+Run this in the BYOM runner to check the Machine, native server and public tunnel
+and retrieve the current password. Token handling is the same as deployment;
+this command does not rebuild, restart or resize the Machine:
+
+```sh
+./byom diagnose fly
+```
+
+If a connection closes during authentication, use the returned PASSWORD value
+to update the Livebook secret. See [troubleshooting](../../README.md#diagnose-an-instance).
+
 ## Connection details
 
 Progress goes to stdout. After public WSS authentication and echo succeed, BYOM

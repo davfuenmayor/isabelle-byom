@@ -117,6 +117,19 @@ The generated key defaults to `~/.ssh/isabelle-byom-isabelle-byom`, with a match
 `.known_hosts` file. Keep those files outside disposable runners for future
 updates and access. If SSH rejects restored key permissions, use `chmod 600 KEY_FILE`.
 
+## Diagnose an existing deployment
+
+In the BYOM runner, supply the existing SSH key and the same address choice as
+deployment. This checks provider access, server state, native Isabelle and the
+public tunnel without changing the deployment. Use `HCLOUD_TOKEN` or `--token FILE`:
+
+```sh
+./byom diagnose hetzner --sslip --ssh-key-file /path/to/deployment-key
+```
+
+Replace `--sslip` with `--hostname HOST` for your domain.
+See [troubleshooting](../../README.md#diagnose-an-instance) for connection failures.
+
 ## Connection details
 
 Progress goes to stdout. After public WSS authentication and echo succeed, BYOM

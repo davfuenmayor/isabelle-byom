@@ -5,8 +5,7 @@ System.put_env("LB_ISABELLE_URL", System.fetch_env!("ISABELLE_URL"))
 System.put_env("LB_ISABELLE_PASSWORD", System.fetch_env!("ISABELLE_PASSWORD"))
 
 defaults = [
-  Path.expand("../../livebooks/Client.livemd", __DIR__),
-  Path.expand("../../livebooks/remote/ClientShared.livemd", __DIR__)
+  Path.expand("../../livebooks/Client.livemd", __DIR__)
 ]
 
 for path <- if(System.argv() == [], do: defaults, else: System.argv()) do
@@ -18,7 +17,7 @@ for path <- if(System.argv() == [], do: defaults, else: System.argv()) do
       File.read!(path)
     )
 
-  initial = %{binding: [], sections: %{}, section: -1, parent: nil, cell: 0, clients: []}
+  initial = %{binding: [], sections: %{}, section: -1, parent: nil, cell: 0}
 
   IntegrationResources.run(fn ->
     state =
@@ -53,13 +52,7 @@ for path <- if(System.argv() == [], do: defaults, else: System.argv()) do
               |> IntegrationResources.instrument()
               |> Code.eval_quoted(state.binding, file: path)
 
-            clients =
-              case Keyword.get(binding, :client) do
-                %IsabelleClient{} = c -> [c | state.clients]
-                _ -> state.clients
-              end
-
-            %{state | binding: binding, cell: state.cell + 1, clients: clients}
+            %{state | binding: binding, cell: state.cell + 1}
         end
       end)
 

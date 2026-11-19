@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# SDK-independent native protocol checks. Development tools: websocat and jq.
+# SDK-independent native protocol checks. Development tools: websocat, jq and base64.
 set -euo pipefail
 export LC_ALL=C
 url=${ISABELLE_URL:?Set ISABELLE_URL to the WebSocket endpoint}
 password=${ISABELLE_PASSWORD:?Set ISABELLE_PASSWORD to the native password}
-for tool in websocat jq; do command -v "$tool" >/dev/null || { echo "Test tool required: $tool" >&2; exit 1; }; done
+for tool in websocat jq base64; do command -v "$tool" >/dev/null || { echo "Test tool required: $tool" >&2; exit 1; }; done
 tmp=$(mktemp -d)
 session='' project='' ws_pid='' writer=''
 write_message() {
@@ -30,6 +30,35 @@ command() {
   while read_response; do [[ "$type" != NOTE ]] && return; done
   return 1
 }
+upload_yxml() {
+  local request
+  printf -v request '%s \005\006file\006%s=%s\006path=%s\005%s\005\006\005' \
+    "$1" "$2" "$3" "$4" "$5"
+  command "$request"
+}
+upload() {
+  local path text
+  path=$(printf '%s' "$4" | base64 | tr -d '\n')
+  text=$(printf '%s' "$5" | base64 | tr -d '\n')
+  upload_yxml "$1" "$2" "$3" "$path" "$text"
+}
+project_file() { upload byom_write_project_file project_id "$project" "$@"; }
+session_file() { upload byom_write_file session_id "$session" "$@"; }
+remove_project() { command $'byom_remove_project \005\006project\006project_id='"$project"$'\005\005\006\005'; }
+result_field() {
+  local prefix=$'\005\006byom\006' suffix=$'\005\005\006\005'
+  local attrs field fields
+  [[ "$body" == "$prefix"*"$suffix" ]] || return 1
+  attrs=${body#"$prefix"}
+  IFS=$'\006' read -r -a fields <<< "${attrs%"$suffix"}"
+  for field in "${fields[@]}"; do
+    if [[ "$field" == "$1="* ]]; then
+      printf '%s\n' "${field#*=}" | jq -Rr @base64d
+      return
+    fi
+  done
+  return 1
+}
 async() {
   command "$1"
   [[ "$type" == OK ]]
@@ -52,7 +81,7 @@ cleanup() {
     async "session_stop $(jq -nc --arg id "$session" '{session_id:$id}')" || true
   fi
   if [[ -n "$project" ]]; then
-    command "byom_remove_project $(jq -nc --arg id "$project" '{project_id:$id}')" || true
+    remove_project || true
   fi
   [[ -z "$writer" ]] || kill "$writer" 2>/dev/null || true
   [[ -z "$ws_pid" ]] || kill "$ws_pid" 2>/dev/null || true
@@ -72,7 +101,7 @@ read_response
 [[ "$type" == OK ]]
 if [[ -n ${ISABELLE_TEST_SESSION:-} ]]; then
   for ((write=0; write<50; write++)); do
-    command "byom_write_file $(jq -nc --arg id "$ISABELLE_TEST_SESSION" '{session_id:$id,path:"concurrent/nested/file",text:"λ"}')"
+    upload byom_write_file session_id "$ISABELLE_TEST_SESSION" concurrent/nested/file λ
     [[ "$type" == OK || "$type" == ERROR ]]
     sleep 0.05
   done
@@ -87,43 +116,50 @@ command "echo $payload"
 [[ "$type" == OK && $(jq -c . <<< "$body") == "$payload" ]]
 command byom_create_project
 [[ "$type" == OK ]]
-project=$(jq -er .project_id <<< "$body")
-project_dir=$(jq -er .dir <<< "$body")
+project=$(result_field project_id)
+project_dir=$(result_field dir)
 for name in ../escape /absolute .; do
-  command "byom_write_project_file $(jq -nc --arg id "$project" --arg path "$name" '{project_id:$id,path:$path,text:"no"}')"
+  project_file "$name" no
   [[ "$type" == ERROR ]]
 done
-command "byom_write_project_file $(jq -nc --arg id "$project" '{project_id:$id,path:"sub/data",text:"λ"}')"
+project_file 'sub/data' $'λ\005\006\n'
 [[ "$type" == OK ]]
-[[ $(jq -r .path <<< "$body") == "$project_dir/sub/data" ]]
-command "byom_remove_project $(jq -nc --arg id "$project" '{project_id:$id}')"
+[[ $(result_field path) == "$project_dir/sub/data" ]]
+project_file empty ''
 [[ "$type" == OK ]]
-command "byom_write_project_file $(jq -nc --arg id "$project" '{project_id:$id,path:"gone",text:"no"}')"
+upload_yxml byom_write_project_file project_id "$project" YmFk '@@@'
+[[ "$type" == ERROR ]]
+upload_yxml byom_write_project_file project_id "$project" YmFk '/w=='
+[[ "$type" == ERROR ]]
+remove_project
+[[ "$type" == OK ]]
+[[ $(result_field removed) == "$project" ]]
+project_file gone no
 [[ "$type" == ERROR ]]
 project=''
 async 'session_start {"session":"HOL","options":["threads=2"]}'
 session=$(jq -er .session_id <<< "$body")
 for name in ../escape /absolute .; do
-  command "byom_write_file $(jq -nc --arg id "$session" --arg path "$name" '{session_id:$id,path:$path,text:"no"}')"
+  session_file "$name" no
   [[ "$type" == ERROR ]]
 done
-command "byom_write_file $(jq -nc --arg id "$session" '{session_id:$id,path:"bad\u0000path",text:"no"}')"
+upload_yxml byom_write_file session_id "$session" YmFkAHBhdGg= bm8=
 [[ "$type" == ERROR ]]
 # A parent that is a file must yield ERROR without breaking the connection.
-command "byom_write_file $(jq -nc --arg id "$session" '{session_id:$id,path:"blocked",text:"file"}')"
+session_file blocked file
 [[ "$type" == OK ]]
-command "byom_write_file $(jq -nc --arg id "$session" '{session_id:$id,path:"blocked/child",text:"no"}')"
+session_file blocked/child no
 [[ "$type" == ERROR ]]
-command "byom_write_file $(jq -nc --arg id "$session" '{session_id:$id,path:"Example.thy",text:"theory Example imports Main begin\nlemma \"x = x\" by simp\nend\n"}')"
+session_file Example.thy $'theory Example imports Main begin\nlemma "x = x" by simp\nend\n'
 [[ "$type" == OK ]]
-path=$(jq -er .path <<< "$body")
+path=$(result_field path)
 async "use_theories $(jq -nc --arg id "$session" --arg dir "${path%/*}" '{session_id:$id,master_dir:$dir,theories:["Example"]}')"
 jq -e '.ok == true' <<< "$body" >/dev/null
 ISABELLE_TEST_SESSION="$session" bash "$0" > "$tmp/writer.log" 2>&1 &
 writer=$!
 async "session_stop $(jq -nc --arg id "$session" '{session_id:$id}')"
 wait "$writer"
-command "byom_write_file $(jq -nc --arg id "$session" '{session_id:$id,path:"after-stop",text:"no"}')"
+session_file after-stop no
 [[ "$type" == ERROR ]]
 session=''
 echo 'Native WebSocket framing, authentication, HOL, session files and project lifecycle passed.'

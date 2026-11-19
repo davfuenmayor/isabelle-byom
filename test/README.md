@@ -13,6 +13,7 @@ shellcheck -x byom providers/common.sh providers/*/*.sh server/*.sh test/*.sh
 bash test/deploy.sh
 bash test/hetzner.sh
 bash test/credentials.sh
+bash test/diagnose.sh
 ```
 
 ## Runtime and filesystem checks (no cloud)
@@ -40,7 +41,7 @@ temporary-file cleanup and writes racing with native-style root deletion.
 
 ## Native protocol checks
 
-The shell protocol test needs Bash 4.3+, the pinned websocat executable and `jq`
+The shell protocol test needs Bash 4.3+, the pinned websocat executable, `jq` and `base64`
 as test tools (the deployer itself remains compatible with macOS Bash). websocat is already included in the server image; use its pinned release
 and checksum from `server/Dockerfile` when installing it on a test workstation.
 
@@ -76,11 +77,7 @@ host-key verification is retained. Use the provider deployer to install a change
 image before claiming that image has passed the boot test. Mock CLI checks
 cannot establish real provider, certificate or sandbox compatibility.
 
-## Last local run (2026-11-17)
+## Client integration checks
 
-Provider CLI mocks, credential checks and all five lifecycle fault scenarios
-passed. The independent protocol suite passed against a disposable local server
-with dynamic native-port allocation. Filesystem tests passed both as root and
-as an unprivileged user, including permission denial. ShellCheck passed.
-Public-provider image/TLS revalidation remains pending current credentials;
-local success does not establish that qualification.
+The [client and notebook checks](client/README.md) use a sibling
+`isabelle_elixir` checkout and a matching BYOM instance.

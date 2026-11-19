@@ -11,7 +11,8 @@ require_commands() {
 read_token() {
   local token
   if [[ -n "$1" ]]; then token=$(cat < "$1")
-  else read -r -s -p "$2: " token; echo >&2; fi
+  elif [[ -n "$2" ]]; then token=$2
+  else read -r -s -p "$3: " token; echo >&2; fi
   [[ -n "$token" ]] || { echo 'Empty provider token' >&2; return 1; }
   printf '%s' "$token"
 }

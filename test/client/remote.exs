@@ -17,17 +17,23 @@ defmodule BYOMRemoteTest do
     url: url
   } do
     text = String.duplicate("λ🙂\n", 100_000)
-    assert {:ok, ^text} = Client.echo(c, text)
+    assert {:ok, ^text} = Client.echo(c, text, format: :json)
     assert {:error, _} = Client.connect("incorrect", url: url)
     assert {:ok, project} = Client.create_project(c)
 
     try do
       assert {:error, _} = Client.write_project_file(c, project, "../escape", "no")
 
-      assert {:ok, %{"path" => path}} =
-               Client.write_project_file(c, project, "sub/Example.thy", "text")
+      name = "sub/λ\x05.txt"
+      at_limit = "λ\x05\x06\n" <> :binary.copy("x", 8 * 1024 * 1024 - 5)
 
-      assert String.starts_with?(path, project["dir"] <> "/")
+      assert {:ok, %{"path" => path}} =
+               Client.write_project_file(c, project, name, at_limit)
+
+      assert path == project["dir"] <> "/" <> name
+
+      assert {:error, %{"message" => "File exceeds 8 MiB"}} =
+               Client.write_project_file(c, project, name, at_limit <> "x")
     after
       assert {:ok, _} = Client.remove_project(c, project)
     end
