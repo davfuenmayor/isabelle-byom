@@ -1,51 +1,51 @@
 # Deploy to Fly
 
 Fly account setup and BYOM deployment can happen on different computers or in
-different shells. The account operator uses their Fly login; the BYOM runner
-receives a deployment token. The runner can be local, in a container or in the
-cloud. They need no shared filesystem, shell environment or saved login.
+different shells. The operator uses their Fly login and hands a deployment
+token to the BYOM runner.
 
 ## Fly account setup
 
 Run these commands in the account operator's environment, with
-[flyctl](https://fly.io/docs/flyctl/install/) installed. First, log in:
+`flyctl` installed. Log in first. [Fly CLI installation](https://fly.io/docs/flyctl/install/)
 
 ```bash
 fly auth login
 ```
 
 This guide uses app `isabelle-byom`. For a new deployment, create it and select
-its organization. Skip this command if the app already exists:
+its organization. Skip app creation if the app already exists.
 
 ```bash
 fly apps create isabelle-byom
 ```
 
-### Choose machine resources
+### Set up public routing and a release
 
-Resize existing Machines with `fly scale vm` or `fly scale memory`; resizing
-restarts them. Currently, BYOM resets resources on every deployment according to
-the settings in [fly.toml](fly.toml) (defaulting to **2 shared CPUs and 4 GB RAM**).
+Allocate a shared IPv4 address for the app. Skip this step if the app
+already has one. BYOM uses the app's routing for the Machine.
 
-### Start an existing machine
-
-For an existing app, list its Machines to find their IDs. Start the one you want
-if it is stopped; this boots its installed image, including any previously
-installed Isabelle. Skip startup for a new app: its first deployment creates
-the Machine.
-
-```bash
-fly machine list --app isabelle-byom
-fly machine start MACHINE_ID --app isabelle-byom
+```sh
+fly ips allocate-v4 --shared --app isabelle-byom
 ```
+
+Publish a pinned BYOM image from your build environment. You can build and push
+to Fly remotely without Docker by using the app's registry. Pass the resulting
+`registry.fly.io/isabelle-byom@sha256:DIGEST` to BYOM.
+
+```sh
+fly deploy . --config providers/fly/fly.toml --app isabelle-byom --remote-only --build-only --push
+```
+
+Set CPU and memory for new Machines in [machine.json](machine.json). The
+defaults are 2 shared CPUs and 4 GiB RAM.
 
 ### Issue a token for BYOM
 
 Create an app-scoped token and save the complete output, including its `FlyV1 `
-prefix. `--expiry 1h` gives one hour; omitting it defaults to **20 years**
-(`175200h`), per [Fly's documentation](https://fly.io/docs/security/tokens/).
-The token authorizes deployment and administrative commands. Its expiry does
-not stop Isabelle or affect clients already using the server:
+prefix. `--expiry 1h` gives one hour. Omitting it defaults to **20 years**
+(`175200h`). The token authorizes BYOM administration. Users connect with the
+native password, which is independent of token expiry. [Fly token documentation](https://fly.io/docs/security/tokens/)
 
 ```bash
 fly tokens create deploy --app isabelle-byom --expiry 1h > fly.token
@@ -59,75 +59,46 @@ own environment.
 ## Run BYOM
 
 These commands run in the **BYOM runner's environment**, from the repository root.
-It needs Linux or macOS, Bash, standard Unix utilities and `flyctl`.
-**No interactive Fly login, local Docker/Podman daemon, or local Isabelle is required.**
+The runner needs Linux or macOS, Bash, standard Unix utilities, `fly` and `jq`.
+BYOM uses the supplied token with Fly's API, including Machine exec for
+credential retrieval and diagnostics.
 
-BYOM uploads the build files using `fly deploy --remote-only`. Fly builds the
-image remotely and installs it. An update restarts the Machine and ends its
-sessions. Defaults are app `isabelle-byom` and region `fra`; override them with
-`--app NAME` or `--region REGION`. The current resource-sizing limitation is
-explained under [Choose machine resources](#choose-machine-resources).
-
-If the runner receives a token file, pass its path with `--token`:
-
-```bash
-./byom fly --token fly.token
-```
-
-If `FLY_API_TOKEN` is already set in the runner's environment, omit the option.
-An explicit `--token` file takes precedence. With neither, BYOM prompts:
-
-```bash
-./byom fly
-```
-
-## Diagnose an existing deployment
-
-Run this in the BYOM runner to check the Machine, native server and public tunnel
-and retrieve the current password. Token handling is the same as deployment;
-this command does not rebuild, restart or resize the Machine:
+Set `IMAGE` to the pinned release. Deployment waits for Fly to prepare the
+image and bring the Machine to its stopped state. Use
+`--app NAME` to select another app or `--region REGION` to place a new Machine
+outside `fra`.
 
 ```sh
-./byom diagnose fly
+./byom fly deploy "$IMAGE" --token fly.token
+./byom fly start --token fly.token
+./byom fly diagnose --token fly.token
+./byom fly stop --token fly.token
+./byom fly destroy --token fly.token
 ```
 
-If a connection closes during authentication, use the returned PASSWORD value
-to update the Livebook secret. See [troubleshooting](../../README.md#diagnose-an-instance).
+Stop before staging a different image or destroying the Machine. Destroy
+removes the BYOM-owned Machine. The app, IP addresses, and published images
+belong to account setup.
 
-## Connection details
+The public URL must route to one Machine because each running server has its
+own password. If the app has several Machines, use `--instance ID` to select
+one and stop the others. New Machines have proxy autostart disabled. BYOM cordons older Machines on
+stop and restores routing on start. Older Machines can continue to use
+`start`, `stop`, and `diagnose`. An operator can retire an old Machine using
+the Fly CLI when migrating to the new deployment API.
 
-Progress goes to stdout. After public WSS authentication and echo succeed, BYOM
-prints the URL and native server password last. Give these values to users;
-they use neither the Fly login nor the deployment token. The server password
-changes on restart:
-
-```text
-=== Isabelle server credentials ===
-URL=wss://isabelle-byom.fly.dev/isabelle
-PASSWORD=...
-===================================
-```
+Give users the printed URL and native password. For the default app, the URL
+is `wss://isabelle-byom.fly.dev/isabelle`.
 
 ## Later Fly administration
 
-Use the account operator's logged-in Fly CLI for these commands. To retrieve
-and verify the current server credentials without deploying:
+Use the account operator's logged-in Fly CLI for permanent removal.
 
-```sh
-fly ssh console --app isabelle-byom -C '/opt/byom/credentials.sh wss://isabelle-byom.fly.dev/isabelle'
-```
-
-To stop a Machine while keeping the app and installed image:
-
-```sh
-fly machine stop MACHINE_ID --app isabelle-byom
-```
-
-To remove the app and its Machines permanently:
+This removes the app and its Machines permanently.
 
 ```sh
 fly apps destroy isabelle-byom
 ```
 
 [Boot tests](../../test/README.md#real-provider-boot-checks) reuse existing Machines
-and restore their stopped state. The [project's operating assumptions](../../README.md#deploy) apply.
+and restore their stopped state. The [project's operating assumptions](../../README.md#run-byom) apply.

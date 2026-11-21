@@ -3,7 +3,7 @@
 Hetzner account setup and BYOM deployment can happen on different computers or
 in different shells. The operator uses a local `hcloud` context. BYOM receives
 a project token and, for an existing server, its SSH key. The runner can be local,
-in a container or in the cloud; it does not need the operator's context files.
+in a container or in the cloud with its own token and key files.
 
 ## Hetzner setup
 
@@ -15,159 +15,96 @@ Run these steps in the account operator's environment, with
 Open your existing project in [Hetzner Console](https://console.hetzner.com/), or
 create one for a new deployment. Choose **Security → API tokens → Generate API
 token → Read & Write** and save the token in `hetzner.token`. Project and token
-creation require Console; see the [official token guide](https://docs.hetzner.com/cloud/api/getting-started/generating-api-token/).
+creation happen in Console. [Hetzner token guide](https://docs.hetzner.com/cloud/api/getting-started/generating-api-token/)
 
 Create a local `hcloud` context using that file. This saves access on the
-operator's computer, without exporting a token for later commands:
+operator's computer.
 
 ```bash
 HCLOUD_TOKEN="$(cat hetzner.token)" hcloud context create isabelle-byom --token-from-env
 ```
 
-If the context already exists, select it instead of creating it:
+Select the existing context if you already created it.
 
 ```sh
 hcloud context use isabelle-byom
 ```
 
-List the project's servers. The existing deployment should appear; an empty
-list is expected for a new project:
+List the project's servers. A new project starts with an empty list.
 
 ```sh
 hcloud server list
 ```
 
-### Start an existing machine
-
-Power on an existing stopped server using the operator's context. This boots
-its installed system and containers. Skip this step for an already running
-server or a new deployment; BYOM creates the new server:
-
-```sh
-hcloud server poweron isabelle-byom
-```
-
 ### Supply access to the BYOM runner
 
 Copy or mount `hetzner.token` into the runner, or supply it as `HCLOUD_TOKEN`.
-The same project token can be used in both environments; a separate runner token
-can also be generated in Console. Revoke disposable tokens there when finished.
+You can reuse the setup token or generate a separate runner token. Revoke
+disposable tokens in Console when finished.
 
-For an existing server, also supply its deployment private key and matching
-`.known_hosts` file if available. A project token cannot recover a lost private
-key. For a new server, BYOM generates and registers its key automatically.
-
-| Runner input | Value |
-| --- | --- |
-| Token | `HCLOUD_TOKEN` or a token-file path in the runner |
-| Existing server | Name, default `isabelle-byom` |
-| Existing server's SSH key | Private-key path in the runner |
-| Address | `--sslip` or your hostname |
-
-<details>
-<summary>Recover a lost SSH key</summary>
-
-Follow Hetzner's [SSH-key recovery procedure](https://docs.hetzner.com/cloud/servers/how-to-rescue/change-ssh-key/)
-to install a replacement on the existing server. Adding a key to Console alone
-does not change an existing server's `authorized_keys`.
-
-Once the replacement works, use the operator's `hcloud` context to rename the
-old cloud key record. BYOM can then register the replacement under the expected
-name on its next run:
+Supply a deployment SSH key and keep it for later access. The default private
+key path for this server is `~/.ssh/isabelle-byom-isabelle-byom`. Generate a key
+in the BYOM runner if you are setting up a new server.
 
 ```sh
-hcloud ssh-key update byom-isabelle-byom --name retired-byom-isabelle-byom
+ssh-keygen -t ed25519 -f ~/.ssh/isabelle-byom-isabelle-byom
 ```
 
-</details>
+Use a key available for SSH in batch mode. For an existing server, supply its
+original key and matching `.known_hosts` file if available. Use
+`--ssh-key-file PATH` for a different key path. A project token cannot recover
+a lost private key. [Hetzner SSH key recovery](https://docs.hetzner.com/cloud/servers/how-to-rescue/change-ssh-key/)
 
 ## Run BYOM
 
-These commands run in the **BYOM runner's environment**, from the repository root.
-It needs Linux or macOS, Bash, standard Unix utilities, `hcloud`, OpenSSH
-(`ssh`, `ssh-keygen`) and tar. **No saved hcloud context, local Docker/Podman,
-Compose or Isabelle installation is required.**
+Set `IMAGE` to a published amd64 BYOM image pinned by SHA-256 digest. BYOM
+creates the VM, registers the key, installs Docker and Compose, and pulls the
+image on the VM. It stages stopped containers and powers the new VM off.
+The runner needs Bash, `hcloud`, OpenSSH, and standard Unix utilities including
+tar. See the [runner requirements](../../README.md#local-requirements).
 
-BYOM uses `hcloud` for cloud resources and SSH access. It uploads build files;
-the server installs Docker/Compose if needed and builds the image there. An
-image update ends existing Isabelle sessions. Caddy provides HTTPS remotely.
-
-Choose `--sslip` for `IP.sslip.io` public DNS, or `--hostname YOUR-HOST` for a domain
-you control. For your domain, point its A record at the server's IPv4 address.
-Defaults for new servers are `isabelle-byom`, `fsn1`, `cx23`, 2 shared vCPUs and
-4 GB RAM on Ubuntu 24.04 x86. Override with `--name`, `--location` or `--type`.
-Existing servers are not resized. Container limits live in [compose.yaml](compose.yaml).
-
-BYOM uses the runner's `HCLOUD_TOKEN`. An explicit `--token hetzner.token` reads
-the file instead and takes precedence. With neither, BYOM prompts for a token.
-
-For an existing server, pass its restored SSH key using its path in the runner:
+On the first deployment, choose `--sslip` for `IP.sslip.io` DNS or
+`--hostname HOST` for a domain you control. For your own domain, point its A
+record at the VM's public IPv4 address before starting Isabelle. Caddy
+provides HTTPS. Later deployments reuse the saved hostname by default.
 
 ```sh
-./byom hetzner --sslip --ssh-key-file /path/to/deployment-key
+./byom hetzner deploy "$IMAGE" --sslip --token hetzner.token
+./byom hetzner start --token hetzner.token
+./byom hetzner diagnose --token hetzner.token
+./byom hetzner stop --token hetzner.token
+./byom hetzner destroy --token hetzner.token
 ```
 
-For a new server, omit the key option. BYOM creates the server, firewall and key:
+New servers default to `isabelle-byom`, `fsn1`, and `cx23` with 2 shared vCPUs
+and 4 GB RAM on Ubuntu 24.04 x86. Override with `--name`, `--location`, or
+`--type`. Container limits live in [compose.yaml](compose.yaml).
 
-```sh
-./byom hetzner --sslip
-```
+Stop the VM before replacing its release or destroying the deployment.
+Destroy removes the VM and its disk, plus the firewall and SSH key record
+that BYOM labeled for the deployment. Keep the private key for future deployments.
+Older deployments may have unlabeled firewall and key records. Hetzner bills
+for powered-off VMs until deletion. [Hetzner billing FAQ](https://docs.hetzner.com/cloud/billing/faq/#do-you-bill-servers-that-are-off)
 
-The generated key defaults to `~/.ssh/isabelle-byom-isabelle-byom`, with a matching
-`.known_hosts` file. Keep those files outside disposable runners for future
-updates and access. If SSH rejects restored key permissions, use `chmod 600 KEY_FILE`.
-
-## Diagnose an existing deployment
-
-In the BYOM runner, supply the existing SSH key and the same address choice as
-deployment. This checks provider access, server state, native Isabelle and the
-public tunnel without changing the deployment. Use `HCLOUD_TOKEN` or `--token FILE`:
-
-```sh
-./byom diagnose hetzner --sslip --ssh-key-file /path/to/deployment-key
-```
-
-Replace `--sslip` with `--hostname HOST` for your domain.
-See [troubleshooting](../../README.md#diagnose-an-instance) for connection failures.
-
-## Connection details
-
-Progress goes to stdout. After public WSS authentication and echo succeed, BYOM
-prints the URL and native server password last. Give these values to users;
-they need neither the project token nor the SSH key. Passwords change on restart:
-
-```text
-=== Isabelle server credentials ===
-URL=wss://YOUR-HOST/isabelle
-PASSWORD=...
-===================================
-```
+Give users the printed URL and native password.
 
 ## Later Hetzner administration
 
 Use the operator's `hcloud` context and deployment SSH key. To inspect the server,
-connect with that key; on the server, use `docker compose` from
-`/opt/isabelle-byom/providers/hetzner`:
+connect with that key. On the server, run `docker compose` from
+`/opt/isabelle-byom/providers/hetzner`.
 
 ```sh
 hcloud server ssh isabelle-byom -i /path/to/deployment-key
 ```
 
-To shut down the server while retaining its disk and deployment:
+Use the operator context to inspect leftover records from older deployments.
 
 ```sh
-hcloud server shutdown isabelle-byom
-```
-
-For permanent removal, delete the server, firewall and cloud key, then check
-for leftover deployment IPs. Server deletion removes its disk and certificates:
-
-```sh
-hcloud server delete isabelle-byom
-hcloud firewall delete byom-isabelle-byom
-hcloud ssh-key delete byom-isabelle-byom
+hcloud firewall list
+hcloud ssh-key list
 hcloud primary-ip list
 ```
 
 [Boot tests](../../test/README.md#real-provider-boot-checks) reuse existing servers
-and restore their stopped state. The [project's operating assumptions](../../README.md#deploy) apply.
+and restore their stopped state. The [project's operating assumptions](../../README.md#run-byom) apply.

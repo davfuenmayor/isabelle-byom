@@ -46,6 +46,10 @@ printf 'init_component "%s"\n' "$component" > "$config/settings"
 if [[ -n ${BYOM_JAVA_OPTIONS:-} ]]; then
   printf 'ISABELLE_TOOL_JAVA_OPTIONS=%q\n' "$BYOM_JAVA_OPTIONS" >> "$config/settings"
 fi
+if [[ -n ${BYOM_THREADS:-} ]]; then
+  [[ "$BYOM_THREADS" =~ ^[1-9][0-9]*$ ]] || { echo 'BYOM_THREADS must be positive' >&2; exit 1; }
+  printf 'threads = %s\n' "$BYOM_THREADS" > "$config/preferences"
+fi
 [[ ! -L "$info" ]] || { echo 'Metadata path must not be a symbolic link' >&2; exit 1; }
 : > "$info"
 chmod 600 "$info"
@@ -64,7 +68,7 @@ if [[ ! "$port" =~ ^[0-9]+$ ]] || ((port <= 0 || port > 65535)); then
   echo 'Isabelle startup timed out' >&2; exit 1
 fi
 websocat -b -E --restrict-uri /isabelle --ping-interval 20 --ping-timeout 60 \
-  "ws-l:0.0.0.0:${PORT:-8080}" "tcp:127.0.0.1:$port" &
+  "ws-l:${BYOM_BIND_ADDRESS:-0.0.0.0}:${PORT:-8080}" "tcp:127.0.0.1:$port" &
 relay_pid=$!
 echo 'Isabelle BYOM ready'
 wait -n "$server_pid" "$relay_pid"

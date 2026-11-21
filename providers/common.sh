@@ -20,3 +20,7 @@ read_token() {
 print_credentials() {
   printf '\n=== Isabelle server credentials ===\n%s\n===================================\n' "$1"
 }
+
+is_pinned_image() {
+  [[ "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9._:/-]*@sha256:[a-f0-9]{64}$ ]]
+}

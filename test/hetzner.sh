@@ -3,83 +3,113 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-mkdir "$tmp/bin"
+mkdir "$tmp/bin" "$tmp/provider"
 cat > "$tmp/bin/hcloud" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
 [[ "$HCLOUD_TOKEN" == test-token ]]
 printf '%s\n' "$*" >> "$MOCK_STATE/calls"
+p="$MOCK_STATE/provider"
 case "$1 $2" in
-  'server list') [[ ! -f "$MOCK_STATE/server" ]] || echo isabelle-byom ;;
+  'server list') [[ ! -f "$p/power" ]] || echo isabelle-byom ;;
   'server-type describe') echo "${MOCK_ARCH:-x86}" ;;
-  'ssh-key list'|'firewall list') : ;;
-  'ssh-key create'|'firewall create') : ;;
-  'server create') touch "$MOCK_STATE/server" ;;
-  'firewall apply-to-resource') echo firewall_already_applied >&2; exit 1 ;;
+  'ssh-key list'|'firewall list')
+    if [[ -e "$p/$1" ]]; then echo byom-isabelle-byom; fi ;;
+  'ssh-key create'|'firewall create')
+    [[ "$*" == *'--label isabelle-byom=isabelle-byom'* ]]
+    touch "$p/$1" ;;
+  'ssh-key describe') ssh-keygen -y -f "$MOCK_STATE/key" ;;
+  'ssh-key delete'|'firewall delete') rm "$p/$1" ;;
+  'server create')
+    [[ "$*" == *'--start-after-create=false'* && "$*" == *'--firewall byom-isabelle-byom'* ]]
+    echo off > "$p/power" ;;
+  'server delete')
+    [[ $(cat "$p/power") == off ]]
+    rm "$p/power" "$p/env" ;;
+  'server shutdown')
+    echo off > "$p/power"
+    if [[ -f "$p/serving" ]]; then rm "$p/serving"; fi ;;
+  'server poweron') echo running > "$p/power" ;;
   'server describe')
     case "$*" in
       *Labels*) echo "${MOCK_OWNER:-isabelle-byom}" ;;
       *PublicNet*) echo 203.0.113.10 ;;
+      *Status*) cat "$p/power" ;;
     esac ;;
   'server ssh')
-    # hcloud preserves everything following the server name; do not pass --.
-    [[ "$4" == -i ]]
+    [[ "$4" == -i && $(cat "$p/power") == running ]]
     echo 'SSH connected' >&2
     command=${!#}
     case "$command" in
       'tar -xf '*) tar -tf - > "$MOCK_STATE/archive" ;;
       *credentials.sh*)
+        [[ -f "$p/serving" ]]
         printf 'URL=wss://203.0.113.10.sslip.io/isabelle\nPASSWORD=test-password\n'
-        [[ ${MOCK_VERIFY_FAIL:-0} == 0 ]] || exit 1
-        ;;
-      *'docker compose up'*) echo 'Building image'; echo 'Starting containers' >&2 ;;
+        [[ ${MOCK_VERIFY_FAIL:-0} == 0 ]] || exit 1 ;;
+      *'docker compose pull'*)
+        [[ ${MOCK_PULL_FAIL:-0} == 0 ]] || exit 1
+        [[ "$command" == *'docker compose create'* ]]
+        image=$(sed -E "s/.*BYOM_IMAGE='([^']+)'.*/\1/" <<< "$command")
+        printf 'BYOM_HOST=203.0.113.10.sslip.io\nBYOM_IMAGE=%s\n' "$image" > "$p/env" ;;
+      *'.env'*) if [[ -f "$p/env" ]]; then cat "$p/env"; fi ;;
+      *'ps --status running'*) if [[ -f "$p/serving" ]]; then echo isabelle; fi ;;
+      *'docker compose start'*) touch "$p/serving" ;;
+      'true'|'mkdir -p /opt/isabelle-byom'|'bash /opt/isabelle-byom/providers/hetzner/bootstrap.sh') : ;;
+      *) echo "Unexpected SSH command: $command" >&2; exit 1 ;;
     esac ;;
   *) echo "Unexpected command: $*" >&2; exit 1 ;;
 esac
-exit 0
 MOCK
 chmod +x "$tmp/bin/hcloud"
-export PATH="$tmp/bin:$PATH" MOCK_STATE="$tmp"
+export PATH="$tmp/bin:$PATH" HCLOUD_TOKEN=test-token MOCK_STATE="$tmp"
+ssh-keygen -q -t ed25519 -N '' -f "$tmp/key"
 printf 'test-token\n' > "$tmp/token with spaces"
-run() { "$root/byom" hetzner --sslip --token "$tmp/token with spaces" --ssh-key-file "$tmp/key"; }
-# A file takes precedence over the environment.
-HCLOUD_TOKEN=invalid run > "$tmp/result" 2> "$tmp/errors"
-run > "$tmp/result" 2> "$tmp/errors"
+printf -v digest '%064d' 1
+image="registry.example.org/isabelle-byom@sha256:$digest"
 expected=$'=== Isabelle server credentials ===\nURL=wss://203.0.113.10.sslip.io/isabelle\nPASSWORD=test-password\n==================================='
+run() { "$root/byom" hetzner "$@" --ssh-key-file "$tmp/key"; }
+
+if run start > "$tmp/result" 2>&1; then exit 1; fi
+if MOCK_ARCH=arm run deploy "$image" --sslip > "$tmp/result" 2>&1; then exit 1; fi
+[[ -z $(ls -A "$tmp/provider") ]]
+# Deliver the same deployment twice, then remove exactly the provider resources it created.
+HCLOUD_TOKEN=invalid run deploy "$image" --sslip --token "$tmp/token with spaces" > "$tmp/result"
+[[ $(cat "$tmp/provider/power") == off && ! -f "$tmp/provider/serving" ]]
+grep -Fq "BYOM_IMAGE=$image" "$tmp/provider/env"
+grep -Fxq providers/hetzner/compose.yaml "$tmp/archive"
+if grep -q '^PASSWORD=' "$tmp/result"; then exit 1; fi
+run deploy "$image" > "$tmp/result"
+[[ $(grep -Fc 'docker compose pull' "$tmp/calls") == 1 ]]
+run destroy
+run destroy
+[[ -z $(ls -A "$tmp/provider") && -s "$tmp/key" ]]
+
+run deploy "$image" --sslip > "$tmp/result"
+cp -R "$tmp/provider" "$tmp/staged"
+run start > "$tmp/result"
 [[ $(cat "$tmp/result") == *"$expected" ]]
-[[ $(grep -c '^PASSWORD=' "$tmp/result") == 1 ]]
-[[ $(cat "$tmp/result") == *$'Building image\nStarting containers'* ]]
-[[ $(cat "$tmp/result") == *$'SSH connected\n\n=== Isabelle server credentials ==='* ]]
-[[ ! -s "$tmp/errors" ]]
-[[ $(awk '/^server create / {n++} END {print n}' "$tmp/calls") == 1 ]]
-archive=$(cat "$tmp/archive")
-[[ "$archive" == *server/component/src/byom.scala* && "$archive" != *token* && "$archive" != *byom.jar* ]]
-if MOCK_OWNER=someone-else "$root/byom" hetzner --sslip --token "$tmp/token with spaces" --ssh-key-file "$tmp/unused-key" > "$tmp/result" 2>/dev/null; then exit 1; fi
-[[ ! -e "$tmp/unused-key" ]]
-[[ ! -s "$tmp/result" ]]
-if MOCK_ARCH=arm run > "$tmp/result" 2>/dev/null; then exit 1; fi
-[[ ! -s "$tmp/result" ]]
-# A separate runner can authenticate with only the supplied environment token.
-HCLOUD_TOKEN=test-token "$root/byom" hetzner --sslip --ssh-key-file "$tmp/key" < /dev/null > "$tmp/result" 2> "$tmp/errors"
+if run destroy > "$tmp/result" 2>&1; then exit 1; fi
+printf -v other '%064d' 2
+other="registry.example.org/isabelle-byom@sha256:$other"
+if run deploy "$other" > "$tmp/result" 2>&1; then exit 1; fi
+run start > "$tmp/result"
 [[ $(cat "$tmp/result") == *"$expected" ]]
-# An unset or empty environment falls back to the prompt.
-printf 'test-token\n' | (unset HCLOUD_TOKEN; exec "$root/byom" hetzner --sslip --ssh-key-file "$tmp/key") > "$tmp/result" 2> "$tmp/errors"
-[[ $(cat "$tmp/result") == *"$expected" ]]
-printf 'test-token\n' | HCLOUD_TOKEN='' "$root/byom" hetzner --sslip --ssh-key-file "$tmp/key" > "$tmp/result" 2> "$tmp/errors"
-[[ $(cat "$tmp/result") == *"$expected" ]]
-# An explicitly empty file must fail even if an environment token is available.
-: > "$tmp/empty-token"
-if HCLOUD_TOKEN=test-token "$root/byom" hetzner --sslip --token "$tmp/empty-token" --ssh-key-file "$tmp/key" > "$tmp/result" 2>/dev/null; then exit 1; fi
-[[ ! -s "$tmp/result" ]]
-# Verification may produce partial output and fail; never display those credentials.
+run stop
+run stop
+diff -r "$tmp/staged" "$tmp/provider"
+if MOCK_OWNER=someone-else run destroy > "$tmp/result" 2>&1; then exit 1; fi
+if MOCK_PULL_FAIL=1 run deploy "$other" > "$tmp/result" 2>&1; then exit 1; fi
+diff -r "$tmp/staged" "$tmp/provider"
+run deploy "$other" > "$tmp/result"
+grep -Fq "BYOM_IMAGE=$other" "$tmp/provider/env"
 cat > "$tmp/bin/sleep" <<'MOCK'
-#!/usr/bin/env bash
+#!/bin/sh
 exit 0
 MOCK
 chmod +x "$tmp/bin/sleep"
-if MOCK_VERIFY_FAIL=1 run > "$tmp/result" 2> "$tmp/errors"; then
-  echo 'Failed verification was ignored' >&2; exit 1
-fi
-[[ $(cat "$tmp/result") == *'Building image'* ]]
-[[ $(cat "$tmp/result") != *'PASSWORD='* && $(cat "$tmp/result") != *'=== Isabelle server credentials ==='* ]]
-echo 'Hetzner token precedence, provisioning, reuse, archive and credentials checks passed.'
+if MOCK_VERIFY_FAIL=1 run start > "$tmp/result" 2>&1; then exit 1; fi
+if grep -q '^PASSWORD=' "$tmp/result"; then exit 1; fi
+run stop
+run destroy
+[[ -z $(ls -A "$tmp/provider") && -s "$tmp/key" ]]
+echo 'Hetzner deploy/destroy and start/stop pairs passed.'

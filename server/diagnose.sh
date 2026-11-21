@@ -16,7 +16,10 @@ commands_ok=false
 while IFS= read -r -t 5 line <&3; do
   if [[ "$line" == 'OK "byom-diagnose"' ]]; then native_ok=true; fi
   if [[ "$line" == 'OK ['* ]]; then
-    if [[ "$line" == *'"byom_write_file"'* && "$line" == *'"byom_create_project"'* ]]; then commands_ok=true; fi
+    commands_ok=true
+    for name in byom_write_file byom_create_project byom_write_project_file byom_remove_project; do
+      if [[ "$line" != *\""$name"\"* ]]; then commands_ok=false; break; fi
+    done
     break
   fi
 done
@@ -28,5 +31,4 @@ echo "Checking public TLS/WebSocket tunnel: $url"
 # Reuse verification from the deployed image; keep its credentials until success.
 credentials=$("${BYOM_CREDENTIALS_TOOL:-/opt/byom/credentials.sh}" "$url")
 echo 'PASS: Public WSS authentication and echo.'
-echo 'Use the current PASSWORD below in Livebook. A stale password can cause a connection close after about five seconds.'
 printf '\n=== Isabelle server credentials ===\n%s\n===================================\n' "$credentials"

@@ -97,6 +97,14 @@ websocat -b -n "$url" < "$tmp/in" > "$tmp/out" 2> "$tmp/ws.log" &
 ws_pid=$!
 exec 3> "$tmp/in" 4< "$tmp/out"
 write_message "$password"
+if [[ ${ISABELLE_TEST_REJECT_AUTH:-0} == 1 ]]; then
+  if IFS= read -r -t 10 <&4; then
+    echo 'The server replied to an invalid password.' >&2
+    exit 1
+  fi
+  echo 'The server withheld its authentication reply.'
+  exit 0
+fi
 read_response
 [[ "$type" == OK ]]
 if [[ -n ${ISABELLE_TEST_SESSION:-} ]]; then

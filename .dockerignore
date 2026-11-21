@@ -1,7 +1,8 @@
 **
 !server/
 !server/Dockerfile
-!server/*.sh
+!server/start.sh
+!server/credentials.sh
 !server/component/
 !server/component/etc/
 !server/component/etc/*

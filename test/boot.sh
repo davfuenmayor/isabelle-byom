@@ -2,17 +2,23 @@
 # Boot EXISTING resources only. Restore stopped state when this test started it.
 set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=../providers/fly/exec.sh
+source "$root/providers/fly/exec.sh"
 provider=${1:?Usage: boot.sh fly APP MACHINE_ID | hetzner SERVER SSH_KEY HOSTNAME}
 resource=${2:?Existing app/server required}
 tmp=$(mktemp -d)
-started=false
+started=false uncordoned=false
 cleanup() {
   local status=$?
   trap - EXIT INT TERM
+  if $uncordoned; then
+    fly machine cordon "$machine" --app "$resource" >&2 || status=1
+  fi
   if $started; then
     case "$provider" in
-      fly) fly machine stop "$machine" --app "$resource" >&2 ;;
-      hetzner) hcloud server shutdown "$resource" >&2 ;;
+      fly) fly machine stop "$machine" --app "$resource" --signal SIGTERM --wait-timeout 1m >&2 || status=1 ;;
+      hetzner) hcloud server shutdown "$resource" --wait >&2 || status=1 ;;
     esac
   fi
   rm -rf "$tmp"
@@ -24,10 +30,15 @@ trap 'exit 143' TERM
 case "$provider" in
   fly)
     machine=${3:?Existing Machine ID required}
-    state=$(fly machine status "$machine" --app "$resource" --json | jq -er .state)
+    details=$(fly machine list --app "$resource" --json | jq -ce --arg id "$machine" '.[] | select(.id == $id)')
+    state=$(jq -er .state <<< "$details")
     if [[ "$state" == stopped ]]; then started=true; fly machine start "$machine" --app "$resource" >&2
     else [[ "$state" == started ]]; fi
-    fly ssh console --app "$resource" --machine "$machine" -C "/opt/byom/credentials.sh wss://$resource.fly.dev/isabelle" > "$tmp/credentials"
+    if jq -e '.cordoned == true' <<< "$details" >/dev/null; then
+      uncordoned=true
+      fly machine uncordon "$machine" --app "$resource" >&2
+    fi
+    fly_exec "$resource" "$machine" 135 "/opt/byom/credentials.sh wss://$resource.fly.dev/isabelle" > "$tmp/credentials"
     ;;
   hetzner)
     key=${3:?Existing deployment SSH key required}
@@ -50,7 +61,5 @@ ISABELLE_URL=$(sed -n 's/^URL=//p' "$tmp/credentials")
 ISABELLE_PASSWORD=$(sed -n 's/^PASSWORD=//p' "$tmp/credentials")
 export ISABELLE_URL ISABELLE_PASSWORD
 bash "$root/test/protocol.sh"
-if ISABELLE_PASSWORD=incorrect bash "$root/test/protocol.sh" > "$tmp/rejected" 2>&1; then
-  echo 'Invalid password was accepted' >&2; exit 1
-fi
+ISABELLE_PASSWORD=incorrect ISABELLE_TEST_REJECT_AUTH=1 bash "$root/test/protocol.sh"
 echo "$provider boot, public TLS, current credentials and protocol checks passed."

@@ -11,11 +11,13 @@ set -euo pipefail
 [[ "$FLY_API_TOKEN" == 'FlyV1 test-token' ]]
 printf '%s\n' "$*" >> "$TEST_DIAGNOSE/calls"
 case "$1 $2" in
-  'status --app') echo 'Machine status' ;;
-  'machine list') printf '[{"state":"%s"}]\n' "${MOCK_STATE:-started}" ;;
+  'machine list') printf '[{"id":"abc1","state":"%s"}]\n' "${MOCK_STATE:-started}" ;;
   'logs --no-tail') echo 'Out of memory: Killed process (fixture)' ;;
   'ips list') echo 'Public IPs' ;;
-  'ssh console') cat > "$TEST_DIAGNOSE/streamed"; echo 'PASS: remote checks' ;;
+  'machine exec')
+    script=${4#*printf %s }
+    printf '%s' "${script%% *}" | base64 -d > "$TEST_DIAGNOSE/streamed"
+    echo '{"stdout":"PASS: remote checks\n"}' ;;
   *) echo "Unexpected mutation/command: $*" >&2; exit 1 ;;
 esac
 MOCK
@@ -25,13 +27,19 @@ set -euo pipefail
 [[ "$HCLOUD_TOKEN" == test-token ]]
 printf '%s\n' "$*" >> "$TEST_DIAGNOSE/calls"
 case "$1 $2" in
+  'server list') echo 'isabelle-byom' ;;
   'server describe')
     case "$*" in
+      *Labels*) echo 'isabelle-byom' ;;
       *Status*) echo "${MOCK_STATE:-running}" ;;
       *PublicNet*) echo '203.0.113.10' ;;
       *) echo 'Server description' ;;
     esac ;;
-  'server ssh') cat > "$TEST_DIAGNOSE/streamed"; echo 'PASS: remote checks' ;;
+  'server ssh')
+    case "${!#}" in
+      *'.env'*) echo 'BYOM_HOST=203.0.113.10.sslip.io' ;;
+      *) cat > "$TEST_DIAGNOSE/streamed"; echo 'PASS: remote checks' ;;
+    esac ;;
   *) echo "Unexpected mutation/command: $*" >&2; exit 1 ;;
 esac
 MOCK
@@ -40,11 +48,11 @@ export PATH="$tmp/bin:$PATH"
 printf 'FlyV1 test-token\n' > "$tmp/fly.token"
 printf 'test-token\n' > "$tmp/hetzner.token"
 : > "$tmp/key"
-FLY_API_TOKEN='FlyV1 test-token' "$root/byom" diagnose fly > "$tmp/result"
+FLY_API_TOKEN='FlyV1 test-token' "$root/byom" fly diagnose > "$tmp/result"
 cmp "$root/server/diagnose.sh" "$tmp/streamed"
 [[ $(cat "$tmp/result") == *'PASS: remote checks'* ]]
-[[ $(cat "$tmp/result") == *'WARNING: Recent out-of-memory termination'* ]]
-HCLOUD_TOKEN=test-token "$root/byom" diagnose hetzner --sslip --ssh-key-file "$tmp/key" > "$tmp/result"
+[[ $(cat "$tmp/result") == *'Fly logs record an out-of-memory termination'* ]]
+HCLOUD_TOKEN=test-token "$root/byom" hetzner diagnose --ssh-key-file "$tmp/key" > "$tmp/result"
 cmp "$root/server/diagnose.sh" "$tmp/streamed"
 [[ $(cat "$tmp/calls") == *'docker compose exec -T isabelle bash -s -- wss://203.0.113.10.sslip.io/isabelle'* ]]
 for provider in fly hetzner; do
@@ -55,7 +63,7 @@ for provider in fly hetzner; do
     if MOCK_STATE=off "$root/byom" diagnose hetzner --sslip --token "$tmp/hetzner.token" --ssh-key-file "$tmp/key" > "$tmp/result" 2>&1; then exit 1; fi
   fi
   [[ $(cat "$tmp/result") == *'FAIL:'* ]]
-  [[ $(cat "$tmp/calls") != *'ssh '* ]]
+  [[ $(cat "$tmp/calls") != *'ssh '* && $(cat "$tmp/calls") != *'machine exec '* ]]
 done
 # Missing, incomplete and unreachable startup metadata must fail before credentials.
 export BYOM_INFO="$tmp/missing"

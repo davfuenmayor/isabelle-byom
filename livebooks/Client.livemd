@@ -1,4 +1,4 @@
-# Isabelle BYOM on Fly.io
+# Isabelle BYOM client
 
 ## Intro
 
@@ -9,7 +9,6 @@ helpers for checking text or files.
 <!-- livebook:{"break_markdown":true} -->
 
 The Livebook runtime needs Elixir 1.20 or newer.
-[Isabelle BYOM](https://github.com/davfuenmayor/isabelle-byom) runs Isabelle on Fly.io.
 
 ```elixir
 Mix.install([
@@ -19,12 +18,12 @@ Mix.install([
 
 ## Connecting to a Server
 
-Add both values from your deployment in Livebook’s **Secrets** panel.
-The Isabelle password changes when its server restarts. To verify the instance
-and retrieve the current values, run `./byom diagnose fly` in the BYOM runner
-(with `FLY_API_TOKEN` set, or add `--token fly.token`), then update these secrets.
+Add the URL and password printed by BYOM to Livebook’s **Secrets** panel.
+When Isabelle restarts, get the current password from the deployer. On Slurm,
+keep the BYOM tunnel open in the environment where Livebook runs.
 
-- `ISABELLE_URL` holds the deployment’s `URL`, including the `wss://` scheme.
+- `ISABELLE_URL` holds the full URL, including `wss://` on Fly or Hetzner and
+  `ws://` on Slurm.
 - `ISABELLE_PASSWORD` holds the current Isabelle `PASSWORD` value only, without
   the `PASSWORD=` label or surrounding quotes.
 
@@ -34,7 +33,7 @@ client =
   case IsabelleClient.connect(System.fetch_env!("LB_ISABELLE_PASSWORD"), url: url) do
     {:ok, client} -> client
     {:error, reason} when reason in [:closed, {:authentication_failed, :closed}] ->
-      raise "Server closed the connection during authentication. Run ./byom diagnose fly, update ISABELLE_PASSWORD with its current PASSWORD value, and retry."
+      raise "Server closed the connection during authentication. Check ISABELLE_URL and ISABELLE_PASSWORD against the current BYOM credentials, then retry."
     {:error, reason} -> raise "Connection failed: #{inspect(reason)}"
   end
 ```
@@ -376,7 +375,7 @@ Note that `build_session` does not create a live server session: it only
 builds a reusable session image.
 
 This small session has its own `ROOT` file and theory. Upload both to a
-project on the Fly Machine and keep the project until the session stops.
+project on the server and keep it until the session stops.
 
 ```elixir
 suffix = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
@@ -466,7 +465,7 @@ IsabelleClient.messages(task)
 {:ok, _} = IsabelleClient.remove_project(client, project)
 ```
 
-Close the connection after stopping your sessions. The Fly deployment continues serving other clients.
+Close the connection after stopping your sessions.
 
 ```elixir
 IsabelleClient.close(client)

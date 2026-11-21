@@ -1,0 +1,18 @@
+{
+  "guest": {"cpu_kind": "shared", "cpus": 2, "memory_mb": 4096},
+  "env": {"BYOM_JAVA_OPTIONS": "-Djava.awt.headless=true -Xms128m -Xmx1g -Xss16m"},
+  "metadata": {"isabelle_byom": "true"},
+  "restart": {"policy": "on-failure"},
+  "services": [
+    {
+      "protocol": "tcp",
+      "internal_port": 8080,
+      "autostart": false,
+      "autostop": "off",
+      "ports": [
+        {"port": 80, "handlers": ["http"], "force_https": true},
+        {"port": 443, "handlers": ["tls", "http"]}
+      ]
+    }
+  ]
+}
